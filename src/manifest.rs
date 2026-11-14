@@ -1,11 +1,15 @@
 //! Timeline-ordered evidence vault index.
 //!
 //! Local-only: this module makes no network calls and uses no credentials.
-//! Source files are hashed and appended to a custody log. AI summaries stay in
-//! their own section and carry their own content hashes. Metadata on a source
-//! is claimed and never verified.
+//! The index is built from [`FileDigest`] values stored in a [`CustodyLog`],
+//! ordered by custody time and then sequence. Each entry is labeled claimed or
+//! verified. `verified` means the content hash was re-checked against the file
+//! and the custody chain. Operator-supplied metadata stays claimed.
+//!
+//! The on-disk export is versioned. `version` is the first JSON field so
+//! [`verify_vault`] can read it before interpreting the rest.
 
-use crate::custody::CustodyLog;
+use crate::custody::{CustodyEntry, CustodyLog};
 use crate::error::{Error, Result};
 use crate::hashing::{hash_file, verify_before_trust, FileDigest, Sha256Hash};
 use serde::ser::SerializeStruct;
@@ -22,7 +26,8 @@ const VAULT_VERSION: u32 = 1;
 
 /// Label attached to every [`ClaimedMetadata`] field in its serialized form.
 ///
-/// There is no verified state. This label is the whole status of the value.
+/// User-supplied metadata is claimed and never verified. This label is the
+/// whole status of those values.
 pub const CLAIM_LABEL: &str = "claimed and never verified";
 
 /// Coarse type of a source, derived from its filename extension.
@@ -57,9 +62,8 @@ impl Category {
 
 /// Operator-supplied description of a source.
 ///
-/// Every field is claimed and never verified. The vault stores the assertion
-/// the operator made. It does not record a verification result, and this
-/// struct has no `verified` flag.
+/// Every field is claimed and never verified. Rechecking a file hash does not
+/// change these values, and this struct has no `verified` flag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClaimedMetadata {
     /// Claimed title. This value is claimed and never verified.
@@ -101,6 +105,20 @@ impl Serialize for ClaimedMetadata {
     }
 }
 
+/// Hash assurance for one vault entry.
+///
+/// [`RecordLabel::Verified`] is allowed only after the content hash has been
+/// re-checked against the file bytes and the custody chain. It does not apply
+/// to operator-supplied metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordLabel {
+    /// Hash taken from the custody log and not yet re-checked against the file.
+    Claimed,
+    /// Hash re-checked against the file and the custody chain.
+    Verified,
+}
+
 /// One source file to bring into the vault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SourceInput {
@@ -115,7 +133,8 @@ pub struct SourceInput {
 /// Summaries are not source files. They reference a source path, live in their
 /// own section of the vault, and carry their own content hash via
 /// [`AiSummaryInput::content_hash`]. That hash covers the summary text only
-/// and is never treated as the source file hash.
+/// and is never treated as the source file hash. A summary stays
+/// [`RecordLabel::Claimed`].
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AiSummaryInput {
     /// Filesystem path of the source this summary describes.
@@ -148,49 +167,86 @@ pub struct VaultInput {
 /// Result of a successful [`export_vault`] call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExportReceipt {
-    /// Export format version. Currently 1.
+    /// Export format version. Currently 1. Serialized first in the export file.
     pub version: u32,
     /// SHA-256 of the canonical JSON encoding of the [`VaultInput`].
     pub vault_fingerprint: Sha256Hash,
     pub source_count: u64,
     pub summary_count: u64,
-    /// Top hash of the custody log after every source was appended.
+    /// Custody chain head hash (`ChainHead::top_hash`) after the sources were appended.
     pub custody_top_hash: Sha256Hash,
     /// Wall-clock seconds since the Unix epoch at export.
     pub exported_at_unix: u64,
 }
 
-#[derive(Serialize)]
-struct IndexedSource {
-    path: PathBuf,
-    category: Category,
-    claimed: ClaimedMetadata,
-    content_hash: Sha256Hash,
-    custody_seq: u64,
+/// One row of the timeline index.
+#[derive(Debug, Clone)]
+pub struct ManifestEntry {
+    pub seq: u64,
+    pub timestamp_unix: u64,
+    pub digest: FileDigest,
+    pub label: RecordLabel,
+    /// Operator-supplied description. Stays claimed across [`Manifest::recheck`].
+    pub claimed: ClaimedMetadata,
 }
 
-#[derive(Serialize)]
-struct IndexedSummary {
-    source_path: PathBuf,
-    model: String,
-    summary: String,
-    confidence: Option<f32>,
-    /// SHA-256 of the summary text. Separate from the source content hash.
-    summary_hash: Sha256Hash,
+/// Vault index ordered by custody time, then sequence.
+#[derive(Debug, Clone)]
+pub struct Manifest {
+    pub entries: Vec<ManifestEntry>,
 }
 
-#[derive(Serialize)]
-struct VaultIndex {
-    version: u32,
-    vault_fingerprint: Sha256Hash,
-    source_count: u64,
-    summary_count: u64,
-    custody_top_hash: Sha256Hash,
-    exported_at_unix: u64,
-    /// Sources in custody (timeline) order.
-    sources: Vec<IndexedSource>,
-    /// AI summaries kept separate from sources. Each carries its own hash.
-    ai_summaries: Vec<IndexedSummary>,
+fn manifest_from_entries(mut entries: Vec<CustodyEntry>) -> Manifest {
+    entries.sort_by(|left, right| {
+        left.timestamp_unix
+            .cmp(&right.timestamp_unix)
+            .then(left.seq.cmp(&right.seq))
+    });
+    let entries = entries
+        .into_iter()
+        .map(|entry| ManifestEntry {
+            seq: entry.seq,
+            timestamp_unix: entry.timestamp_unix,
+            digest: FileDigest {
+                path: PathBuf::from(entry.path),
+                hash: entry.hash,
+            },
+            label: RecordLabel::Claimed,
+            claimed: ClaimedMetadata::default(),
+        })
+        .collect();
+    Manifest { entries }
+}
+
+impl Manifest {
+    /// Build a timeline index from `log`.
+    ///
+    /// The chain is checked so a broken log is not indexed. Every entry is
+    /// labeled [`RecordLabel::Claimed`] because this does not re-hash the files.
+    pub fn from_custody_log(log: &CustodyLog) -> Result<Self> {
+        log.verify_chain()?;
+        let entries = log.entries_from(0)?;
+        Ok(manifest_from_entries(entries))
+    }
+
+    /// Re-check each content hash against the custody chain and the file bytes.
+    ///
+    /// On success every entry label becomes [`RecordLabel::Verified`].
+    /// [`ManifestEntry::claimed`] is left untouched. On failure labels stay
+    /// [`RecordLabel::Claimed`].
+    pub fn recheck(&mut self, log: &CustodyLog) -> Result<()> {
+        log.verify_chain()?;
+        let trusted: Vec<(PathBuf, Sha256Hash)> = self
+            .entries
+            .iter()
+            .map(|entry| (entry.digest.path.clone(), entry.digest.hash))
+            .collect();
+        verify_before_trust(&trusted)?;
+        for entry in &mut self.entries {
+            entry.label = RecordLabel::Verified;
+        }
+        Ok(())
+    }
 }
 
 fn sha256_bytes(bytes: &[u8]) -> Sha256Hash {
@@ -202,15 +258,14 @@ fn sha256_bytes(bytes: &[u8]) -> Sha256Hash {
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
 
 /// Compact JSON of `input` in struct field order.
 ///
-/// This byte string is the canonical encoding behind
-/// [`ExportReceipt::vault_fingerprint`]. It does not include source-file
-/// bytes, custody timestamps, or the on-disk index.
+/// This byte string is what [`ExportReceipt::vault_fingerprint`] hashes. It
+/// does not include source-file bytes, custody timestamps, or the on-disk index.
 fn canonical_vault_json(input: &VaultInput) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(input)?)
 }
@@ -254,27 +309,104 @@ fn utf8_path(path: &Path) -> Result<&str> {
     })
 }
 
+fn source_for<'a>(input: &'a VaultInput, path: &Path) -> Result<&'a SourceInput> {
+    input
+        .sources
+        .iter()
+        .find(|source| source.path == path)
+        .ok_or_else(|| Error::NotIngested(path.display().to_string()))
+}
+
+/// Read `version` as the first field of an export object.
+fn leading_version(bytes: &[u8]) -> Result<u32> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|err| Error::Invalid(format!("export is not utf-8: {err}")))?;
+    let Some(rest) = text.trim_start().strip_prefix('{') else {
+        return Err(Error::Invalid("export is not a JSON object".into()));
+    };
+    let rest = rest.trim_start();
+    let Some(after_key) = rest.strip_prefix("\"version\"") else {
+        return Err(Error::Invalid(
+            "export version must be the first field".into(),
+        ));
+    };
+    let Some(after_colon) = after_key.trim_start().strip_prefix(':') else {
+        return Err(Error::Invalid(
+            "export version must be the first field".into(),
+        ));
+    };
+    let digits = after_colon.trim_start();
+    let end = digits
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(digits.len());
+    if end == 0 {
+        return Err(Error::Invalid("export version is missing".into()));
+    }
+    digits[..end]
+        .parse()
+        .map_err(|err| Error::Invalid(format!("bad export version: {err}")))
+}
+
+#[derive(Serialize)]
+struct IndexedSource {
+    path: PathBuf,
+    category: Category,
+    /// `verified` only after the content hash was re-checked.
+    label: RecordLabel,
+    claimed: ClaimedMetadata,
+    content_hash: Sha256Hash,
+    custody_seq: u64,
+    custody_time_unix: u64,
+}
+
+#[derive(Serialize)]
+struct IndexedSummary {
+    source_path: PathBuf,
+    model: String,
+    summary: String,
+    confidence: Option<f32>,
+    /// SHA-256 of the summary text. Separate from the source content hash.
+    summary_hash: Sha256Hash,
+    /// Summaries are not file re-checks, so this stays claimed.
+    label: RecordLabel,
+}
+
+/// On-disk export. `version` is the first field on purpose.
+#[derive(Serialize)]
+struct VaultIndex {
+    version: u32,
+    vault_fingerprint: Sha256Hash,
+    source_count: u64,
+    summary_count: u64,
+    custody_top_hash: Sha256Hash,
+    exported_at_unix: u64,
+    /// Sources in custody-time order, then sequence order.
+    sources: Vec<IndexedSource>,
+    /// AI summaries kept separate from sources. Each carries its own hash.
+    ai_summaries: Vec<IndexedSummary>,
+}
+
 fn write_index(
     vault_path: &Path,
     input: &VaultInput,
-    digests: &[FileDigest],
-    seqs: &[u64],
+    manifest: &Manifest,
     fingerprint: Sha256Hash,
     custody_top_hash: Sha256Hash,
     exported_at_unix: u64,
 ) -> Result<()> {
-    let sources = input
-        .sources
-        .iter()
-        .enumerate()
-        .map(|(i, source)| IndexedSource {
-            path: source.path.clone(),
+    let mut sources = Vec::with_capacity(manifest.entries.len());
+    for entry in &manifest.entries {
+        let source = source_for(input, &entry.digest.path)?;
+        sources.push(IndexedSource {
+            path: entry.digest.path.clone(),
             category: source.category,
-            claimed: source.claimed.clone(),
-            content_hash: digests[i].hash,
-            custody_seq: seqs[i],
-        })
-        .collect();
+            label: entry.label,
+            claimed: entry.claimed.clone(),
+            content_hash: entry.digest.hash,
+            custody_seq: entry.seq,
+            custody_time_unix: entry.timestamp_unix,
+        });
+    }
     let ai_summaries = input
         .ai_summaries
         .iter()
@@ -284,6 +416,7 @@ fn write_index(
             summary: summary.summary.clone(),
             confidence: summary.confidence,
             summary_hash: summary.content_hash(),
+            label: RecordLabel::Claimed,
         })
         .collect();
     let index = VaultIndex {
@@ -312,11 +445,12 @@ fn write_index(
 ///
 /// AI summary references are checked before any file is opened. A summary that
 /// names a path outside `input.sources` returns [`Error::Invalid`] and leaves
-/// the filesystem untouched. Summaries are written in their own section of the
-/// index and are not custody entries; each one carries [`AiSummaryInput::content_hash`].
+/// the filesystem untouched. The written index is ordered by custody time and
+/// then sequence. Its first JSON field is `version`. The receipt's
+/// `custody_top_hash` is the custody chain head hash.
 ///
-/// The custody file is `vault_path` with its extension replaced by `custody`.
-/// Sources are appended in input order, which is the vault timeline.
+/// File-hash labels in the index are [`RecordLabel::Verified`] only because
+/// [`Manifest::recheck`] passed. Summary labels and claimed metadata stay claimed.
 pub fn export_vault<P: AsRef<Path>>(vault_path: P, input: &VaultInput) -> Result<ExportReceipt> {
     validate_summary_refs(input)?;
 
@@ -326,18 +460,21 @@ pub fn export_vault<P: AsRef<Path>>(vault_path: P, input: &VaultInput) -> Result
 
     let custody_path = vault_path.with_extension("custody");
     let mut log = CustodyLog::open(&custody_path)?;
-    let mut seqs = Vec::with_capacity(digests.len());
     for digest in &digests {
         let path = utf8_path(&digest.path)?;
-        seqs.push(log.append(path, digest.hash)?);
+        log.append(path, digest.hash)?;
     }
     let head = log.verify_chain()?;
+    let mut manifest = Manifest::from_custody_log(&log)?;
+    for entry in &mut manifest.entries {
+        entry.claimed = source_for(input, &entry.digest.path)?.claimed.clone();
+    }
+    manifest.recheck(&log)?;
     let exported_at_unix = unix_now();
     write_index(
         vault_path,
         input,
-        &digests,
-        &seqs,
+        &manifest,
         fingerprint,
         head.top_hash,
         exported_at_unix,
@@ -353,37 +490,64 @@ pub fn export_vault<P: AsRef<Path>>(vault_path: P, input: &VaultInput) -> Result
     })
 }
 
-/// Re-check the custody log beside `vault_path`, then re-hash every logged file.
-///
-/// The custody file is `vault_path` with its extension replaced by `custody`.
-/// [`CustodyLog::verify_chain`] runs first. Only a chain that still links is
-/// handed to [`verify_before_trust`]. A missing custody file is
-/// [`Error::NotIngested`] and is not created.
-pub fn verify_vault<P: AsRef<Path>>(vault_path: P) -> Result<Vec<FileDigest>> {
-    let custody_path = vault_path.as_ref().with_extension("custody");
+fn verify_export_v1(vault_path: &Path) -> Result<Vec<FileDigest>> {
+    let custody_path = vault_path.with_extension("custody");
     if !custody_path.is_file() {
         return Err(Error::NotIngested(custody_path.display().to_string()));
     }
     let log = CustodyLog::open(&custody_path)?;
-    log.verify_chain()?;
-    let entries = log.entries_from(0)?;
-    let trusted: Vec<(PathBuf, Sha256Hash)> = entries
-        .iter()
-        .map(|entry| (PathBuf::from(&entry.path), entry.hash))
-        .collect();
-    verify_before_trust(&trusted)
+    let mut manifest = Manifest::from_custody_log(&log)?;
+    manifest.recheck(&log)?;
+    Ok(manifest
+        .entries
+        .into_iter()
+        .map(|entry| entry.digest)
+        .collect())
+}
+
+/// Read the export `version` first, then re-check that format.
+///
+/// Version 1 re-checks the custody chain and then the file bytes. Any other
+/// version is [`Error::Invalid`]. The version field has to be the first JSON
+/// field; otherwise the export is rejected before the chain is opened.
+pub fn verify_vault<P: AsRef<Path>>(vault_path: P) -> Result<Vec<FileDigest>> {
+    let vault_path = vault_path.as_ref();
+    let bytes = std::fs::read(vault_path)?;
+    match leading_version(&bytes)? {
+        1 => verify_export_v1(vault_path),
+        version => Err(Error::Invalid(format!("unknown export version {version}"))),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sha2::Digest;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn temp_file(data: impl AsRef<[u8]>) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(data.as_ref()).unwrap();
+        file.flush().unwrap();
+        file
+    }
 
     fn source(path: PathBuf, ext: &str, claimed: ClaimedMetadata) -> SourceInput {
         SourceInput {
             path,
             category: Category::from_extension(ext),
             claimed,
+        }
+    }
+
+    fn custody_entry(seq: u64, timestamp_unix: u64, path: &str, byte: u8) -> CustodyEntry {
+        CustodyEntry {
+            seq,
+            path: path.to_string(),
+            hash: Sha256Hash::from_bytes([byte; 32]),
+            prev_hash: Sha256Hash::from_bytes([0u8; 32]),
+            timestamp_unix,
         }
     }
 
@@ -404,6 +568,110 @@ mod tests {
         assert_eq!(Category::from_extension("zip"), Category::Other);
         assert_eq!(Category::from_extension(""), Category::Other);
         assert_eq!(Category::from_extension("..."), Category::Other);
+    }
+
+    #[test]
+    fn manifest_built_from_custody_log() {
+        let scrambled = manifest_from_entries(vec![
+            custody_entry(1, 50, "late.txt", 1),
+            custody_entry(5, 10, "second.txt", 5),
+            custody_entry(4, 10, "first.txt", 4),
+        ]);
+        let order: Vec<_> = scrambled
+            .entries
+            .iter()
+            .map(|entry| (entry.timestamp_unix, entry.seq, entry.digest.path.clone()))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (10, 4, PathBuf::from("first.txt")),
+                (10, 5, PathBuf::from("second.txt")),
+                (50, 1, PathBuf::from("late.txt")),
+            ]
+        );
+        assert!(scrambled
+            .entries
+            .iter()
+            .all(|entry| entry.label == RecordLabel::Claimed));
+        assert_eq!(
+            scrambled.entries[0].digest.hash,
+            Sha256Hash::from_bytes([4u8; 32])
+        );
+
+        let log_file = NamedTempFile::new().unwrap();
+        let mut log = CustodyLog::open(log_file.path()).unwrap();
+        let first = temp_file(b"one");
+        let second = temp_file(b"two");
+        let digest_first = hash_file(first.path()).unwrap();
+        let digest_second = hash_file(second.path()).unwrap();
+        log.append(first.path().to_str().unwrap(), digest_first.hash)
+            .unwrap();
+        log.append(second.path().to_str().unwrap(), digest_second.hash)
+            .unwrap();
+
+        let manifest = Manifest::from_custody_log(&log).unwrap();
+        assert_eq!(manifest.entries.len(), 2);
+        for pair in manifest.entries.windows(2) {
+            let left = (pair[0].timestamp_unix, pair[0].seq);
+            let right = (pair[1].timestamp_unix, pair[1].seq);
+            assert!(
+                left < right,
+                "expected custody time then seq, {left:?} then {right:?}"
+            );
+        }
+        assert_eq!(manifest.entries[0].seq, 0);
+        assert_eq!(manifest.entries[1].seq, 1);
+        assert_eq!(manifest.entries[0].digest.path, first.path());
+        assert_eq!(manifest.entries[0].digest.hash, digest_first.hash);
+        assert_eq!(manifest.entries[1].digest.path, second.path());
+        assert_eq!(manifest.entries[1].digest.hash, digest_second.hash);
+        assert_eq!(manifest.entries[0].label, RecordLabel::Claimed);
+        assert_eq!(log.head().top_hash, log.verify_chain().unwrap().top_hash);
+    }
+
+    #[test]
+    fn label_accuracy_claimed_versus_verified() {
+        let log_file = NamedTempFile::new().unwrap();
+        let mut log = CustodyLog::open(log_file.path()).unwrap();
+        let source = temp_file(b"original-bytes");
+        let digest = hash_file(source.path()).unwrap();
+        log.append(source.path().to_str().unwrap(), digest.hash)
+            .unwrap();
+
+        let mut manifest = Manifest::from_custody_log(&log).unwrap();
+        assert_eq!(manifest.entries[0].label, RecordLabel::Claimed);
+        assert_eq!(
+            serde_json::to_value(manifest.entries[0].label).unwrap(),
+            serde_json::json!("claimed")
+        );
+        manifest.entries[0].claimed.title = Some("Operator title".into());
+        let claimed_before = serde_json::to_value(&manifest.entries[0].claimed).unwrap();
+        assert_eq!(claimed_before["title"]["label"], CLAIM_LABEL);
+        assert!(claimed_before["title"].get("verified").is_none());
+
+        std::fs::write(source.path(), b"tampered").unwrap();
+        let err = manifest.recheck(&log).unwrap_err();
+        match err {
+            Error::Mismatch(list) => assert_eq!(list.len(), 1),
+            other => panic!("expected Mismatch, got {other}"),
+        }
+        assert_eq!(manifest.entries[0].label, RecordLabel::Claimed);
+        assert_eq!(
+            manifest.entries[0].claimed.title.as_deref(),
+            Some("Operator title")
+        );
+
+        std::fs::write(source.path(), b"original-bytes").unwrap();
+        manifest.recheck(&log).unwrap();
+        assert_eq!(manifest.entries[0].label, RecordLabel::Verified);
+        assert_eq!(
+            serde_json::to_value(manifest.entries[0].label).unwrap(),
+            serde_json::json!("verified")
+        );
+        let claimed_after = serde_json::to_value(&manifest.entries[0].claimed).unwrap();
+        assert_eq!(claimed_before, claimed_after);
+        assert_eq!(manifest.entries[0].digest.hash, digest.hash);
     }
 
     #[test]
@@ -444,8 +712,9 @@ mod tests {
         assert_eq!(receipt.vault_fingerprint, sha256_bytes(&canonical));
         assert!(vault.with_extension("custody").is_file());
 
-        let doc: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&vault).unwrap()).unwrap();
+        let raw = std::fs::read_to_string(&vault).unwrap();
+        assert_version_is_first_field(&raw);
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(doc["version"].as_u64().unwrap(), 1);
         assert_eq!(doc["source_count"].as_u64().unwrap(), 2);
         assert_eq!(doc["summary_count"].as_u64().unwrap(), 1);
@@ -462,6 +731,8 @@ mod tests {
             receipt.exported_at_unix
         );
         assert_eq!(doc["sources"][0]["category"].as_str().unwrap(), "Document");
+        assert_eq!(doc["sources"][0]["label"].as_str().unwrap(), "verified");
+        assert_eq!(doc["sources"][1]["label"].as_str().unwrap(), "verified");
         assert_eq!(
             doc["sources"][0]["claimed"]["title"]["label"]
                 .as_str()
@@ -473,6 +744,7 @@ mod tests {
             doc["ai_summaries"][0]["summary_hash"].as_str().unwrap(),
             summary_hash.to_hex()
         );
+        assert_eq!(doc["ai_summaries"][0]["label"].as_str().unwrap(), "claimed");
         assert_ne!(
             doc["ai_summaries"][0]["summary_hash"].as_str().unwrap(),
             doc["sources"][0]["content_hash"].as_str().unwrap()
@@ -487,6 +759,18 @@ mod tests {
             doc["ai_summaries"][0]["source_path"].as_str().unwrap(),
             src_a.to_str().unwrap()
         );
+        let times: Vec<_> = doc["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry["custody_time_unix"].as_u64().unwrap(),
+                    entry["custody_seq"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert!(times.windows(2).all(|pair| pair[0] <= pair[1]));
 
         let verified = verify_vault(&vault).unwrap();
         assert_eq!(verified.len(), 2);
@@ -498,12 +782,66 @@ mod tests {
         // `ChainBroken` even when a source was also rewritten.
         std::fs::write(&src_a, b"tampered-bytes").unwrap();
         let custody = vault.with_extension("custody");
-        let mut raw = std::fs::read(&custody).unwrap();
-        assert!(raw.len() > 8);
-        raw.truncate(raw.len() / 2);
-        std::fs::write(&custody, raw).unwrap();
+        let mut custody_raw = std::fs::read(&custody).unwrap();
+        assert!(custody_raw.len() > 8);
+        custody_raw.truncate(custody_raw.len() / 2);
+        std::fs::write(&custody, custody_raw).unwrap();
         let err = verify_vault(&vault).unwrap_err();
         assert!(matches!(err, Error::ChainBroken { .. }), "{err}");
+    }
+
+    #[test]
+    fn export_version_is_first_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = temp_file(b"versioned-bytes");
+        let vault = dir.path().join("vault.json");
+        let input = VaultInput {
+            sources: vec![source(
+                file.path().to_path_buf(),
+                "txt",
+                ClaimedMetadata::default(),
+            )],
+            ai_summaries: Vec::new(),
+        };
+        let receipt = export_vault(&vault, &input).unwrap();
+        assert_eq!(receipt.version, 1);
+        assert_ne!(receipt.custody_top_hash, Sha256Hash::from_bytes([0u8; 32]));
+
+        let raw = std::fs::read_to_string(&vault).unwrap();
+        assert_version_is_first_field(&raw);
+        assert_eq!(leading_version(raw.as_bytes()).unwrap(), 1);
+
+        std::fs::write(file.path(), b"changed-after-export").unwrap();
+        let unknown = raw.replacen("\"version\": 1", "\"version\": 99", 1);
+        assert_ne!(unknown, raw);
+        assert_version_is_first_field(&unknown);
+        std::fs::write(&vault, &unknown).unwrap();
+        let err = verify_vault(&vault).unwrap_err();
+        match err {
+            Error::Invalid(message) => {
+                assert!(message.contains("unknown export version 99"), "{message}")
+            }
+            other => panic!("expected Invalid, got {other}"),
+        }
+
+        let displaced = raw.replacen('{', "{\n  \"note\": \"not-the-version\",", 1);
+        std::fs::write(&vault, displaced).unwrap();
+        let err = verify_vault(&vault).unwrap_err();
+        match err {
+            Error::Invalid(message) => {
+                assert!(message.contains("first field"), "{message}");
+            }
+            other => panic!("expected Invalid, got {other}"),
+        }
+    }
+
+    fn assert_version_is_first_field(raw: &str) {
+        let rest = raw.trim_start().strip_prefix('{').expect("JSON object");
+        let rest = rest.trim_start();
+        assert!(
+            rest.starts_with("\"version\""),
+            "version must be the first field, got {rest}"
+        );
     }
 
     #[test]
@@ -569,7 +907,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{field} is not an object"));
             assert_eq!(labeled.len(), 2, "{field} should only have label and value");
             assert_eq!(
-                labeled.get("label").and_then(|v| v.as_str()),
+                labeled.get("label").and_then(|label| label.as_str()),
                 Some(CLAIM_LABEL),
                 "{field}"
             );
@@ -629,6 +967,7 @@ mod tests {
         assert_eq!(first.vault_fingerprint, second.vault_fingerprint);
         assert_eq!(first.vault_fingerprint, expected);
         assert_eq!(first.version, 1);
+        assert_ne!(first.custody_top_hash, Sha256Hash::from_bytes([0u8; 32]));
 
         let mut changed = input.clone();
         changed.sources[0].claimed.title = Some("Rewritten claim".into());
