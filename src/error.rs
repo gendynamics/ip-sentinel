@@ -1,4 +1,4 @@
-/// Error type shared by all modules.
+//! Error type shared by all modules.
 
 use crate::hashing::Sha256Hash;
 use std::fmt;
@@ -20,7 +20,10 @@ pub enum Error {
     Io(std::io::Error),
     Json(serde_json::Error),
     /// The custody log is broken at `seq`. History was rewritten, reordered or truncated.
-    ChainBroken { seq: u64, reason: String },
+    ChainBroken {
+        seq: u64,
+        reason: String,
+    },
     /// Verify-before-trust failed. Every mismatching file is listed, and nothing was exported.
     Mismatch(Vec<Mismatch>),
     /// A file is not in the custody log, so it has no trusted hash to check against.
@@ -30,16 +33,31 @@ pub enum Error {
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, mut f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Io(e) => write!(f, "io: {e}"),
             Error::Json(e) => write!(f, "json: {e}"),
-            Error::ChainBroken { seq, reason } => write!(f, "custody chain broken at entry {seq}: {reason}"),
+            Error::ChainBroken { seq, reason } => {
+                write!(f, "custody chain broken at entry {seq}: {reason}")
+            }
             Error::Mismatch(list) => {
-                write!(f, "verify-before-trust failed for {} file(s); export stopped", list.len());
+                write!(
+                    f,
+                    "verify-before-trust failed for {} file(s); export stopped",
+                    list.len()
+                )?;
                 for m in list {
-                    let found = m.found.map(|h| h.to_hex()).unwrap_or_else(|| "missing".into());
-                    write!(f, "\n  {}).expected {}, found {})", m.path.display(), m.expected, found);
+                    let found = m
+                        .found
+                        .map(|h| h.to_hex())
+                        .unwrap_or_else(|| "missing".into());
+                    write!(
+                        f,
+                        "\n  {}: expected {}, found {}",
+                        m.path.display(),
+                        m.expected,
+                        found
+                    )?;
                 }
                 Ok(())
             }
@@ -49,7 +67,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {})
+impl std::error::Error for Error {}
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {

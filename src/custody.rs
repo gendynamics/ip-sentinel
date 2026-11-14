@@ -1,14 +1,16 @@
-use crate::error::{Error, Result}
+use crate::error::{Error, Result};
 use crate::hashing::Sha256Hash;
-use serde::Serialize;
-use std::fs::{File, OpenOptions}
-use std::io::{BufRead, BufReader, Write}
-use std::path::{Path, PathBuf}
-use std::time::{SystemTime, UNIX_EPOCH}
+use serde::{Deserialize, Serialize};
+use sha2::Digest;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-const FRAME_LEN_SIZE: u32 = 4;
+/// Big-endian length prefix in front of each JSON custody frame.
+const FRAME_HEADER_LEN: usize = 4;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustodyEntry {
     pub seq: u64,
     pub path: String,
@@ -17,31 +19,32 @@ pub struct CustodyEntry {
     pub timestamp_unix: u64,
 }
 
+/// Name re-exported by the crate root.
+pub type Entry = CustodyEntry;
+
 impl CustodyEntry {
     fn chain_hash(&self) -> Sha256Hash {
-        let mut h = sha2::Sha256::new();
-        h.update(self.seq.to_be_bytes());
-        h.update(self.path.as_bytes());
-        h.update(self.hash.as_bytes());
-        h.update(self.prev_hash.as_bytes());
-        h.update(self.timestamp_unix.to_be_bytes());
-        Sha256Hash::from_bytes(h.finalize().into())
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(self.seq.to_be_bytes());
+        hasher.update(self.path.as_bytes());
+        hasher.update(self.hash.as_bytes());
+        hasher.update(self.prev_hash.as_bytes());
+        hasher.update(self.timestamp_unix.to_be_bytes());
+        Sha256Hash::from_bytes(hasher.finalize().into())
     }
 
     fn to_frame(&self) -> Result<Vec<u8>> {
-        let json = serde_json::to_vec(self).map_err(Error::from);
-        let json = match json {
-            Ok(j) => j,
-            Err(e) => return Err(e),
-        };
-        let mut frame = Vec::with_capacity(FRAME_LEN_SIZE as u64 as u64 + json.len());
-        frame.extend_from_slice(&(json.len() as u32).to_be_bytes());
+        let json = serde_json::to_vec(self)?;
+        let len = u32::try_from(json.len())
+            .map_err(|_| Error::Invalid("custody entry exceeds 4 GiB".into()))?;
+        let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + json.len());
+        frame.extend_from_slice(&len.to_be_bytes());
         frame.extend_from_slice(&json);
         Ok(frame)
     }
 
-    fn from_frame(bytes: Vec<u8>) -> Result<Self> {
-        serde_json::from_slice(&bytes).map_err(Error::from)
+    fn from_frame(bytes: &[u8]) -> Result<Self> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 }
 
@@ -62,15 +65,11 @@ impl CustodyLog {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new()
             .read(true)
-            .write(true)
             .create(true)
             .append(true)
-            .open(&path)
-            .map_err(Error::from);
-        let file = match file {
-            Ok(f) => f,
-            Err(e) => return Err(e),
-        };
+            .open(&path)?;
+        // A broken log still opens. `verify_chain` reports the damage; replacing
+        // the head here is what lets a caller inspect a truncated file.
         let head = Self::recover_head(&path).unwrap_or(ChainHead {
             seq: 0,
             top_hash: Sha256Hash::from_bytes([0u8; 32]),
@@ -79,50 +78,58 @@ impl CustodyLog {
     }
 
     fn recover_head(path: &Path) -> Result<ChainHead> {
-        let f = File::open(path).map_err(Error::from);
-        let f = match f {
-            Ok(f) => f,
-            Err(e) => return Err(e),
-        };
-        let reader = BufReader::new(f);
-        let mut seq = 0u64;
-        let mut top = Sha256Hash::from_bytes([0u8; 32]);
-        for line in reader.lines() {
-            let line = line.map_err(Error::from);
-            let line = match line {
-                Ok(l) => l,
-                Err(e) => return Err(e),
-            };
-            if line.is_empty() {
-                continue;
+        let entries = Self::read_entries(path)?;
+        Self::validate_chain(&entries)
+    }
+
+    fn read_entries(path: &Path) -> Result<Vec<CustodyEntry>> {
+        let mut file = File::open(path)?;
+        let file_len = file.metadata()?.len();
+        let mut pos = 0u64;
+        let mut entries = Vec::new();
+
+        loop {
+            if pos == file_len {
+                return Ok(entries);
             }
-            let len: u32 = u32::from_be_bytes(
-                line.as_bytes()[0..4]
-                    .try_into()
-                    .map_err(|e: std::array::TryFromSliceError| Error::Invalid(e.to_string()))?,
-            );
-            let start = 4;
-            let end = start + len as u64 as u64;
-            if end > line.len() as u64 {
+            let seq = entries.len() as u64;
+            if file_len - pos < FRAME_HEADER_LEN as u64 {
                 return Err(Error::ChainBroken {
                     seq,
                     reason: "truncated frame".into(),
                 });
             }
-            let entry = CustodyEntry::from_frame(line.as_bytes()[start..end].to_vec());
-            let entry = match entry {
-                Ok(e) => e,
-                Err(e) => {
-                    return Err(Error::ChainBroken {
-                        seq,
-                        reason: format!("decode: {e}"),
-                    });
-                }
-            };
+            let mut len_buf = [0u8; FRAME_HEADER_LEN];
+            file.read_exact(&mut len_buf)
+                .map_err(|err| map_read_err(err, seq))?;
+            pos += FRAME_HEADER_LEN as u64;
+            let len = u64::from(u32::from_be_bytes(len_buf));
+            if file_len - pos < len {
+                return Err(Error::ChainBroken {
+                    seq,
+                    reason: "truncated frame".into(),
+                });
+            }
+            let mut body = vec![0u8; len as usize];
+            file.read_exact(&mut body)
+                .map_err(|err| map_read_err(err, seq))?;
+            pos += len;
+            let entry = CustodyEntry::from_frame(&body).map_err(|err| Error::ChainBroken {
+                seq,
+                reason: format!("decode: {err}"),
+            })?;
+            entries.push(entry);
+        }
+    }
+
+    fn validate_chain(entries: &[CustodyEntry]) -> Result<ChainHead> {
+        let mut seq = 0u64;
+        let mut top = Sha256Hash::from_bytes([0u8; 32]);
+        for entry in entries {
             if entry.seq != seq {
                 return Err(Error::ChainBroken {
                     seq,
-                    reason: format!("sequence gap: expected {seq}, got {}}", entry.seq),
+                    reason: format!("sequence gap: expected {seq}, got {}", entry.seq),
                 });
             }
             if entry.prev_hash != top {
@@ -148,16 +155,13 @@ impl CustodyLog {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
         };
-        let frame = entry.to_frame().map_err(Error::from);
-        let frame = match frame {
-            Ok(f) => f,
-            Err(e) => return Err(e),
-        };
-        self.file.write_all(&frame).map_err(Error::from);
-        self.file.sync_all().map_err(Error::from);
+        let frame = entry.to_frame()?;
+        self.file.write_all(&frame)?;
+        self.file.sync_all()?;
+        let assigned = entry.seq;
         self.head.top_hash = entry.chain_hash();
         self.head.seq += 1;
-        Ok(self.head.seq - 1)
+        Ok(assigned)
     }
 
     pub fn head(&self) -> &ChainHead {
@@ -169,40 +173,22 @@ impl CustodyLog {
     }
 
     pub fn entries_from(&self, seq: u64) -> Result<Vec<CustodyEntry>> {
-        let f = File::open(&self.path).map_err(Error::from);
-        let f = match f {
-            Ok(f) => f,
-            Err(e) => return Err(e),
-        };
-        let reader = BufReader::new(f);
-        let mut out = Vec::new();
-        let mut cur = 0u64;
-        for line in reader.lines() {
-            let line = line.map_err(Error::from);
-            let line = match line {
-                Ok(l) => l,
-                Err(e) => return Err(e),
-            };
-            if line.is_empty() {
-                continue;
-            }
-            if cur >= seq {
-                let len: u32 = u32::from_be_bytes(
-                    line.as_bytes()[0..4]
-                        .try_into()
-                        .map_err(|e: std::array::TryFromSliceError| Error::Invalid(e.to_string()))?,
-                );
-                let start = 4;
-                let end = start + len as u64 as u64;
-                if end <= line.len() as u64 {
-                    if let Ok(e) = CustodyEntry::from_frame(line.as_bytes()[start..end].to_vec()) {
-                        out.push(e);
-                    }
-                }
-            }
-            cur += 1;
+        let entries = Self::read_entries(&self.path)?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| entry.seq >= seq)
+            .collect())
+    }
+}
+
+fn map_read_err(err: std::io::Error, seq: u64) -> Error {
+    if err.kind() == std::io::ErrorKind::UnexpectedEof {
+        Error::ChainBroken {
+            seq,
+            reason: "truncated frame".into(),
         }
-        Ok(out)
+    } else {
+        Error::Io(err)
     }
 }
 
@@ -265,7 +251,7 @@ mod tests {
         let log = CustodyLog::open(log_file.path()).unwrap();
         let err = log.verify_chain().unwrap_err();
         match err {
-            Error::ChainBroken { .. } => {},
+            Error::ChainBroken { .. } => {}
             other => panic!("expected ChainBroken, got {other}"),
         }
     }

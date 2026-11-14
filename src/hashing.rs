@@ -1,4 +1,5 @@
 use crate::error::{Error, Mismatch, Result};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -41,6 +42,19 @@ impl std::fmt::Display for Sha256Hash {
     }
 }
 
+impl Serialize for Sha256Hash {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Sha256Hash {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let hex = String::deserialize(deserializer)?;
+        Self::from_hex(&hex).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Result of hashing a single file: its path and digest.
 #[derive(Debug, Clone)]
 pub struct FileDigest {
@@ -52,7 +66,7 @@ pub struct FileDigest {
 /// files don't load into memory.
 pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<FileDigest> {
     let path = path.as_ref().to_path_buf();
-    let file = File::open(&path).map_err(|e| Error::Io(e));
+    let file = File::open(&path).map_err(Error::Io);
     let file = match file {
         Ok(f) => f,
         Err(e) => return Err(e),
@@ -160,7 +174,7 @@ mod tests {
         std::fs::write(f1.path(), b"TAMPERED").unwrap();
         let d2 = hash_file(f2.path()).unwrap();
         // Give f2 a wrong expected hash too.
-        let bad = Sha256Hash::from_hex(&"00".repeat(32)).unwrap_or_else(|e| {
+        let bad = Sha256Hash::from_hex(&"00".repeat(32)).unwrap_or_else(|_| {
             // fallback: just flip a byte of a real hash
             let mut h = d2.hash.as_bytes();
             h[0] ^= 0xff;
