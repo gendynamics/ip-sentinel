@@ -1,0 +1,11 @@
+# Rust build output
+target/
+
+__pycache__/
+.pytest_cache/
+.DS_Store
+
+# Ledgers and demo data are generated locally and can contain local file paths.
+sentinel_data/
+demo_sentinel_data/
+demo_data/

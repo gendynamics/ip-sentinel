@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="sentinel-token" content="{{SENTINEL_TOKEN}}">
+  <meta name="color-scheme" content="dark light">
+  <title>IP Sentinel</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2l8 3.4v5.8c0 5-3.4 9.3-8 10.8-4.6-1.5-8-5.8-8-10.8V5.4z' fill='%23ff7a45'/%3E%3Cpath d='M8.5 12l2.4 2.4 4.6-4.8' fill='none' stroke='%231b0c05' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <!-- Icon sprite: 24px grid, stroked with currentColor -->
+  <svg width="0" height="0" class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5.2c0 4.4-2.9 8.3-7 9.8-4.1-1.5-7-5.4-7-9.8V6z"/></symbol>
+    <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M12 3l7 3v5.2c0 4.4-2.9 8.3-7 9.8-4.1-1.5-7-5.4-7-9.8V6z"/><path d="M9 12.2l2.1 2.1L15.2 10"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h3.8l2 2.2h7.2a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 1 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 1 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4.5 19.5h15"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6.5 5 13 2.5-6.5h4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 20V9"/><path d="M7.5 13.5L12 9l4.5 4.5"/><path d="M4.5 4.5h15"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 4.7a2 2 0 0 1 3.4 0l7.3 12.6a2 2 0 0 1-1.7 3H4.7a2 2 0 0 1-1.7-3z"/><path d="M12 10v4"/><path d="M12 17.1v.1"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8v.1"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M7.5 12h9"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.8"/><path d="M12 3v1.8M12 19.2V21M3 12h1.8M19.2 12H21M5.6 5.6l1.3 1.3M17.1 17.1l1.3 1.3M5.6 18.4l1.3-1.3M17.1 6.9l1.3-1.3"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.6A7.8 7.8 0 0 1 9.4 4.5 7.8 7.8 0 1 0 19.5 14.6z"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M9 20h6M12 16v4"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3.5h6.5l4 4V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M13.5 3.5V7.5h4"/></symbol>
+    <symbol id="i-anchor" viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="2"/><path d="M12 7.5V20"/><path d="M5 12.5a7 7 0 0 0 14 0"/><path d="M8.5 10.5h7"/></symbol>
+  </svg>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+      <div class="brand">
+        <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#i-shield-check"/></svg></span>
+        <span class="brand-text">
+          <span class="brand-name">IP Sentinel</span>
+          <span class="brand-sub">Custody ledger</span>
+        </span>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-group">
+          <div class="nav-label">Control</div>
+          <a class="nav-link" href="#/overview" data-route="overview" title="Overview">
+            <svg class="icon" aria-hidden="true"><use href="#i-grid"/></svg><span class="nav-text">Overview</span>
+          </a>
+          <a class="nav-link" href="#/workspace" data-route="workspace" title="Workspace">
+            <svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span class="nav-text">Workspace</span>
+          </a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">Ledger</div>
+          <a class="nav-link" href="#/ledger" data-route="ledger" title="Chain">
+            <svg class="icon" aria-hidden="true"><use href="#i-link"/></svg><span class="nav-text">Chain</span>
+            <span class="nav-count" id="navCountChain" hidden></span>
+          </a>
+          <a class="nav-link" href="#/verify" data-route="verify" title="Verify">
+            <svg class="icon" aria-hidden="true"><use href="#i-shield-check"/></svg><span class="nav-text">Verify</span>
+            <span class="nav-count is-danger" id="navCountVerify" hidden>!</span>
+          </a>
+          <a class="nav-link" href="#/export" data-route="export" title="Export">
+            <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><span class="nav-text">Export</span>
+          </a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">System</div>
+          <a class="nav-link" href="#/activity" data-route="activity" title="Activity">
+            <svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span class="nav-text">Activity</span>
+          </a>
+        </div>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="conn" id="conn" data-state="connecting" role="status">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="conn-text" id="connText">Connecting…</span>
+        </div>
+        <div class="foot-meta" id="connHost"></div>
+        <div class="foot-meta" id="storagePath"></div>
+        <div class="theme-switch" role="group" aria-label="Color theme">
+          <button type="button" data-theme-choice="system" aria-pressed="false" title="Match system theme"><svg class="icon" aria-hidden="true"><use href="#i-monitor"/></svg><span class="sr-only">System</span></button>
+          <button type="button" data-theme-choice="dark" aria-pressed="true" title="Dark theme"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="sr-only">Dark</span></button>
+          <button type="button" data-theme-choice="light" aria-pressed="false" title="Light theme"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg><span class="sr-only">Light</span></button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="backdrop" id="backdrop" aria-hidden="true"></div>
+
+    <div class="main">
+      <header class="topbar">
+        <button type="button" class="icon-btn menu-btn" id="menuBtn" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+          <svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg>
+        </button>
+        <h1 class="view-title" id="viewTitle">Overview</h1>
+        <div class="topbar-pills">
+          <a class="pill" id="wsPill" href="#/workspace" data-tone="neutral">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-folder"/></svg><span class="pill-text" id="wsPillText">No workspace</span>
+          </a>
+          <span class="pill" id="integrityPill" data-tone="neutral" role="status">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-shield"/></svg><span>Checking…</span>
+          </span>
+        </div>
+      </header>
+
+      <div id="banners"></div>
+
+      <main class="content" id="content">
+        <!-- ============ Overview ============ -->
+        <section class="view" data-view="overview" aria-labelledby="viewTitle">
+          <div class="stat-grid">
+            <article class="card stat">
+              <div class="stat-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-link"/></svg>Blocks in chain</div>
+              <div class="stat-value" id="statBlocks">–</div>
+              <div class="stat-sub" id="statBlocksSub">&nbsp;</div>
+            </article>
+            <article class="card stat">
+              <div class="stat-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-file"/></svg>Files in latest snapshot</div>
+              <div class="stat-value" id="statFiles">–</div>
+              <div class="stat-sub" id="statFilesSub">&nbsp;</div>
+            </article>
+            <article class="card stat">
+              <div class="stat-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"/></svg>Last commit</div>
+              <div class="stat-value stat-value-text" id="statLast">–</div>
+              <div class="stat-sub" id="statLastSub">&nbsp;</div>
+            </article>
+            <article class="card stat" id="statIntegrityCard">
+              <div class="stat-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-shield-check"/></svg>Integrity</div>
+              <div class="stat-value" id="statIntegrity">–</div>
+              <div class="stat-sub" id="statIntegritySub">&nbsp;</div>
+            </article>
+          </div>
+
+          <div class="grid-2">
+            <article class="card">
+              <header class="card-head">
+                <h2>Head hash</h2>
+                <span class="card-aside" id="headHashAside"></span>
+              </header>
+              <div id="headHash" class="head-hash"><span class="muted">Loading…</span></div>
+              <p class="note"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-anchor"/></svg><span>Anchor this hash with an independent timestamp service to make your dates verifiable by third parties.</span></p>
+            </article>
+            <article class="card">
+              <header class="card-head"><h2>Workspace</h2></header>
+              <div id="ovWorkspace"></div>
+            </article>
+          </div>
+
+          <div class="grid-2">
+            <article class="card">
+              <header class="card-head"><h2>Recent blocks</h2><a class="card-link" href="#/ledger">View chain</a></header>
+              <div id="ovBlocks"></div>
+            </article>
+            <article class="card">
+              <header class="card-head"><h2>Recent activity</h2><a class="card-link" href="#/activity">All activity</a></header>
+              <div id="ovActivity"></div>
+            </article>
+          </div>
+        </section>
+
+        <!-- ============ Workspace ============ -->
+        <section class="view" data-view="workspace" aria-labelledby="viewTitle" hidden>
+          <article class="card">
+            <form id="wsForm" class="ws-form" novalidate>
+              <label class="field-label" for="wsInput">Workspace folder</label>
+              <div class="input-row">
+                <div class="input-icon">
+                  <svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>
+                  <input class="input mono" id="wsInput" type="text" placeholder="/Users/you/Projects/battery-cell" autocomplete="off" spellcheck="false" autocapitalize="off">
+                </div>
+                <button type="submit" class="btn" id="wsSetBtn">Set workspace</button>
+                <button type="button" class="btn btn-primary" id="scanBtn"><svg class="icon" aria-hidden="true"><use href="#i-scan"/></svg>Scan</button>
+              </div>
+              <p class="hint">Every file in this folder and its subfolders is hashed with SHA-256. Hidden files, symlinks and the ledger folder are skipped.</p>
+            </form>
+          </article>
+
+          <div id="scanAlert"></div>
+
+          <div id="scanEmpty"></div>
+
+          <article class="card card-flush" id="scanResults" hidden>
+            <div class="scan-summary" id="scanSummary" aria-live="polite"></div>
+            <div class="toolbar">
+              <div class="chips" role="group" aria-label="Filter by status" id="scanFilters">
+                <button type="button" class="chip" data-filter="all" aria-pressed="true">All <span class="count"></span></button>
+                <button type="button" class="chip" data-filter="new" aria-pressed="false"><span class="chip-dot is-new"></span>New <span class="count"></span></button>
+                <button type="button" class="chip" data-filter="modified" aria-pressed="false"><span class="chip-dot is-modified"></span>Modified <span class="count"></span></button>
+                <button type="button" class="chip" data-filter="unchanged" aria-pressed="false"><span class="chip-dot is-unchanged"></span>Unchanged <span class="count"></span></button>
+              </div>
+              <div class="input-icon search">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+                <input class="input input-sm" id="scanSearch" type="search" placeholder="Filter by path" aria-label="Filter files by path" autocomplete="off" spellcheck="false">
+              </div>
+            </div>
+            <div id="scanTable"></div>
+          </article>
+
+          <article class="card commit-card" id="commitCard" hidden>
+            <form id="commitForm" novalidate>
+              <div class="commit-row">
+                <div class="field">
+                  <label class="field-label" for="authorInput">Author</label>
+                  <input class="input" id="authorInput" type="text" placeholder="Jane Inventor &lt;jane@example.com&gt;" autocomplete="name" spellcheck="false">
+                </div>
+                <button type="submit" class="btn btn-primary" id="commitBtn"><svg class="icon" aria-hidden="true"><use href="#i-link"/></svg><span id="commitBtnText">Commit to ledger</span></button>
+              </div>
+              <p class="hint" id="commitHint"></p>
+            </form>
+          </article>
+        </section>
+
+        <!-- ============ Chain ============ -->
+        <section class="view" data-view="ledger" aria-labelledby="viewTitle" hidden>
+          <div class="view-intro">
+            <p>Each block records the SHA-256 of every file plus the hash of the block before it. Matching fingerprints show each link; if any record changes, the link breaks.</p>
+            <a class="btn" href="#/verify"><svg class="icon" aria-hidden="true"><use href="#i-shield-check"/></svg>Verify</a>
+          </div>
+          <ol class="chain" id="chain" aria-label="Ledger blocks, newest first"></ol>
+        </section>
+
+        <!-- ============ Verify ============ -->
+        <section class="view" data-view="verify" aria-labelledby="viewTitle" hidden>
+          <article class="card audit-card">
+            <header class="card-head">
+              <h2>Integrity audit</h2>
+              <button type="button" class="btn btn-primary" id="auditBtn"><svg class="icon" aria-hidden="true"><use href="#i-shield-check"/></svg>Run integrity audit</button>
+            </header>
+            <div id="auditResult"></div>
+          </article>
+
+          <article class="card">
+            <header class="card-head"><h2>Prove a file</h2><span class="card-aside">Check whether this exact content is in the ledger</span></header>
+            <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-describedby="dropHint">
+              <span class="drop-icon"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg></span>
+              <strong>Drop files here or <span class="link-text">browse</span></strong>
+              <span class="hint" id="dropHint">Files are hashed locally in your browser and never uploaded.</span>
+              <input type="file" id="fileInput" multiple hidden>
+            </div>
+            <form id="hashForm" class="hash-form" novalidate>
+              <label class="field-label" for="hashInput">Or paste a SHA-256</label>
+              <div class="input-row">
+                <input class="input mono" id="hashInput" type="text" placeholder="64 hexadecimal characters" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="80">
+                <button type="submit" class="btn" id="hashBtn"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Look up</button>
+              </div>
+            </form>
+            <div id="proofResults" class="proof-list" aria-live="polite"></div>
+          </article>
+        </section>
+
+        <!-- ============ Export ============ -->
+        <section class="view" data-view="export" aria-labelledby="viewTitle" hidden>
+          <article class="card export-card">
+            <header class="card-head"><h2>Verification package</h2></header>
+            <p class="lead">One self-contained JSON file with every block, every file hash, and the steps a third party needs to check the chain without access to this computer. File contents are never included, only their fingerprints.</p>
+            <dl class="kv" id="exportMeta"></dl>
+            <div class="export-actions">
+              <button type="button" class="btn btn-primary btn-lg" id="exportBtn"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download proof package</button>
+              <span class="hint" id="exportHint"></span>
+            </div>
+          </article>
+
+          <aside class="callout" data-tone="warning">
+            <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+            <div>
+              <strong>Timestamps come from this machine's clock.</strong>
+              <p>The chain proves your records weren't edited and the order they were made in. To make the dates verifiable by a third party, anchor the head hash with an independent service such as an RFC&nbsp;3161 timestamp authority or OpenTimestamps.</p>
+            </div>
+          </aside>
+
+          <details class="card details">
+            <summary><svg class="icon icon-sm chevron" aria-hidden="true"><use href="#i-chevron"/></svg>How a third party verifies this package</summary>
+            <ol class="steps">
+              <li>For each block, drop the <code>block_hash</code> field and serialize the rest as JSON with sorted keys, separators <code>(',', ':')</code>, UTF-8 encoding and non-ASCII characters left unescaped.</li>
+              <li>The SHA-256 hex digest of those bytes must equal the block's <code>block_hash</code>.</li>
+              <li>Block 0's <code>previous_block_hash</code> is 64 zeros; every later block's must equal the prior block's <code>block_hash</code>.</li>
+              <li>To prove a file's contents existed by a block's timestamp, compute the file's SHA-256 and find it in that block's <code>entries</code>.</li>
+            </ol>
+          </details>
+        </section>
+
+        <!-- ============ Activity ============ -->
+        <section class="view" data-view="activity" aria-labelledby="viewTitle" hidden>
+          <div class="toolbar toolbar-bare">
+            <div class="chips" role="group" aria-label="Filter by level" id="activityFilters">
+              <button type="button" class="chip" data-level="all" aria-pressed="true">All <span class="count"></span></button>
+              <button type="button" class="chip" data-level="info" aria-pressed="false"><span class="chip-dot is-info"></span>Info <span class="count"></span></button>
+              <button type="button" class="chip" data-level="success" aria-pressed="false"><span class="chip-dot is-success"></span>Success <span class="count"></span></button>
+              <button type="button" class="chip" data-level="warning" aria-pressed="false"><span class="chip-dot is-warning"></span>Warning <span class="count"></span></button>
+              <button type="button" class="chip" data-level="error" aria-pressed="false"><span class="chip-dot is-error"></span>Error <span class="count"></span></button>
+            </div>
+            <span class="live" id="liveIndicator" data-state="connecting"><span class="dot" aria-hidden="true"></span><span id="liveText">Connecting</span></span>
+          </div>
+          <article class="card card-flush">
+            <ol class="log" id="activityLog" aria-label="Activity log, newest first"></ol>
+          </article>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <dialog class="dialog" id="commitDialog" aria-labelledby="commitDialogTitle">
+    <div class="dialog-body">
+      <span class="dialog-icon"><svg class="icon" aria-hidden="true"><use href="#i-link"/></svg></span>
+      <h2 id="commitDialogTitle">Commit to ledger?</h2>
+      <p class="muted" id="commitDialogLead">This adds a permanent, hash-linked block. It can't be edited afterwards.</p>
+      <dl class="kv" id="commitDialogSummary"></dl>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn" id="dlgCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="dlgConfirm">Commit block</button>
+    </div>
+  </dialog>
+</body>
+</html>
