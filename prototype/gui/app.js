@@ -838,18 +838,18 @@
     const s = app.state;
     if (!s) return;
     if (changed('audit', [s.integrity, app.audit?.checked_at])) {
-      const integ = s.integrity;
-      const tone = !integ.valid ? 'danger' : s.chain_length ? 'ok' : 'neutral';
-      const title = !integ.valid
-        ? `FAIL: ${plural(integ.errors.length, 'problem')} found`
+      const integrity = s.integrity;
+      const tone = !integrity.valid ? 'danger' : s.chain_length ? 'ok' : 'neutral';
+      const title = !integrity.valid
+        ? `FAIL: ${plural(integrity.errors.length, 'problem')} found`
         : s.chain_length ? 'PASS: chain intact' : 'Nothing to verify yet';
       const sub = [];
-      sub.push(`${plural(integ.blocks_checked, 'block')} checked · re-checked live every ${POLL_MS / 1000}s`);
+      sub.push(`${plural(integrity.blocks_checked, 'block')} checked · re-checked live every ${POLL_MS / 1000}s`);
       if (app.audit) {
         sub.push(h('br'), `Last manual audit `, timeEl(app.audit.checked_at, 'relative'), `: ${app.audit.valid ? 'passed' : 'failed'}`);
       }
-      const errors = integ.errors.length
-        ? h('ul', { class: 'audit-errors' }, integ.errors.map((e) => {
+      const errors = integrity.errors.length
+        ? h('ul', { class: 'audit-errors' }, integrity.errors.map((e) => {
           const m = /^block (\d+):/.exec(e);
           return h('li', null, m ? h('a', { href: `#/ledger/${m[1]}` }, `block ${m[1]}`) : null, m ? e.slice(m[0].length - 1) : e);
         }))

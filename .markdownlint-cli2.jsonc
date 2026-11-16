@@ -1,0 +1,14 @@
+{
+  // Same rules as the VS Code markdownlint extension's default: long lines are allowed.
+  "config": {
+    "MD013": false
+  },
+  // Generated or local-only content.
+  "ignores": [
+    "**/target/**",
+    "**/node_modules/**",
+    "**/.pytest_cache/**",
+    "prototype/demo_data/**",
+    "prototype/demo_sentinel_data/**"
+  ]
+}

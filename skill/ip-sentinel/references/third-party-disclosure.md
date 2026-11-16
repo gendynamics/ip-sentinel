@@ -3,7 +3,7 @@
 ## Components
 
 - **UGOS Skill Creation Tool / uliya-skill-kit 0.7.3** — UGREEN Hackathon
-  Starter Kit (https://ai.ugreen.com/pages/hackathon-starter-kit). Used to
+  Starter Kit (<https://ai.ugreen.com/pages/hackathon-starter-kit>). Used to
   author and statically validate this skill. Not bundled in the submission ZIP.
 - **UGREEN AI NAS CLI capabilities** — ug-filesystem, ug-photo, ug-document,
   ug-knowledge. Platform-provided; no separate license.

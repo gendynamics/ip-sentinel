@@ -34,10 +34,10 @@ SolidCell - draft claims (working copy, not filed)
 
 1. A solid-state battery cell comprising a sulfide electrolyte layer between a
    lithium-metal anode and a high-nickel cathode, wherein the electrolyte layer
-   is between 18 and 30 micrometres thick.
+   is between 18 and 30 micrometers thick.
 
 2. The cell of claim 1, wherein the anode/electrolyte interface carries a
-   lithium-indium interlayer of less than 2 micrometres.
+   lithium-indium interlayer of less than 2 micrometers.
 
 3. The cell of claim 1, further comprising a stack pressure of 2 to 5 MPa
    maintained by a spring-loaded housing.
@@ -76,7 +76,7 @@ scratch - delete later
 # Provisional patent application - DRAFT
 
 ## Title
-Pressure-stabilised solid-state battery cell with a lithium-indium interlayer
+Pressure-stabilized solid-state battery cell with a lithium-indium interlayer
 
 ## Background
 Solid-state cells lose capacity when stack pressure drifts as electrodes expand
